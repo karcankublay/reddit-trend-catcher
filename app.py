@@ -13,10 +13,10 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from transformers import pipeline
 
-# NLTK stopwords ve LLM model
+# NLTK stopwords ve LLM
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
-summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+summarizer = pipeline("summarization", model="t5-small", tokenizer="t5-small")
 
 # Gereksiz kelimeler
 custom_noise = set([
@@ -26,7 +26,7 @@ custom_noise = set([
 ])
 all_stopwords = stop_words.union(custom_noise)
 
-# Temizleme fonksiyonu
+# Metin temizleme
 def clean_text(text):
     if not isinstance(text, str):
         return ""
@@ -37,9 +37,9 @@ def clean_text(text):
     return " ".join(filtered)
 
 # Başlık
-st.title("🧠 Reddit Trend Catcher – Pro Edition")
+st.title("🧠 Reddit Trend Catcher – t5-small LLM Version")
 
-# Çoklu subreddit seçimi
+# Subreddit seçimi
 selected_subreddits = st.multiselect("Choose subreddits:", ["chatgpt", "ai", "technology", "worldnews"], default=["chatgpt"])
 limit = st.slider("Number of posts per subreddit:", 50, 200, 100)
 
@@ -66,7 +66,7 @@ df['cleaned_text'] = df['full_text'].apply(clean_text)
 df['created_date'] = pd.to_datetime(df['created_utc']).dt.date
 df['created_datetime'] = pd.to_datetime(df['created_utc'])
 
-# Zaman aralıkları
+# Zaman dilimleri
 today = pd.Timestamp.now().normalize()
 this_week = today - timedelta(days=7)
 this_month = today.replace(day=1)
@@ -77,7 +77,7 @@ weekly_df = df[df['created_datetime'] >= this_week]
 monthly_df = df[df['created_datetime'] >= this_month]
 prev_week_df = df[(df['created_datetime'] >= last_week) & (df['created_datetime'] < this_week)]
 
-# Analiz fonksiyonu
+# Analiz ve özetleme
 def display_cluster(df_segment, title):
     text = " ".join(df_segment['cleaned_text'])
     tokens = text.split()
@@ -99,13 +99,15 @@ def display_cluster(df_segment, title):
     for t in matching_titles:
         st.write(f"• {t}")
 
+    # t5-small ile özetleme
     joined_titles = " ".join(matching_titles.tolist())
     if joined_titles.strip():
         st.markdown("**🧠 LLM Summary:**")
         try:
-            summary = summarizer(joined_titles, max_length=60, min_length=20, do_sample=False)[0]['summary_text']
+            input_text = "summarize: " + joined_titles[:512]
+            summary = summarizer(input_text, max_length=60, min_length=20, do_sample=False)[0]['summary_text']
             st.success(summary)
-        except:
+        except Exception as e:
             st.warning("LLM summarization failed.")
 
 # Gösterimler
@@ -113,7 +115,7 @@ display_cluster(daily_df, "Today's Trends")
 display_cluster(weekly_df, "This Week's Trends")
 display_cluster(monthly_df, "This Month's Trends")
 
-# Trend tahmini
+# Tahmin
 st.subheader("🔮 Predicted Trending Words for Next Week")
 prev_text = " ".join(prev_week_df['cleaned_text'])
 curr_text = " ".join(weekly_df['cleaned_text'])
@@ -128,4 +130,5 @@ if trend_diff:
     st.table(trend_df)
 else:
     st.write("No rising trends detected.")
+
 
