@@ -14,18 +14,18 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# Stopwords indir (ilk çalıştırmada bir defa gerekir)
+# 📌 Gerekli NLTK stopwords
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
 
-# 🔐 Reddit API bilgilerini Streamlit secrets'tan al
+# ✅ Reddit API doğrudan burada (demo amaçlı)
 reddit = praw.Reddit(
-    client_id=st.secrets["reddit"]["client_id"],
-    client_secret=st.secrets["reddit"]["client_secret"],
-    user_agent=st.secrets["reddit"]["user_agent"]
+    client_id="QLXZb0s_Cx-fIrHIHD9O6Q",
+    client_secret="3tzZlmidMztZUWGc4IA321buEHKaiA",
+    user_agent="CuguLeee"
 )
 
-# Metin temizleme
+# 🧹 Temizlik fonksiyonu
 def clean_text(text):
     if not isinstance(text, str):
         return ""
@@ -35,17 +35,17 @@ def clean_text(text):
     filtered = [word for word in tokens if word not in stop_words]
     return " ".join(filtered)
 
-# Arayüz başlığı
+# 🎯 Arayüz başlığı
 st.title("🔥 Reddit Trend Catcher (LLM-Free)")
 
-# Kullanıcı girdileri
+# 🧠 Kullanıcı girdileri
 subreddit_input = st.text_input("Enter subreddit (e.g., artificial, gaming)", "artificial")
 post_limit = st.slider("Number of posts to analyze", 20, 200, 100)
 min_score = st.slider("Minimum score of posts", 0, 1000, 0)
 min_comments = st.slider("Minimum number of comments", 0, 500, 0)
 requested_clusters = st.slider("Requested number of topic clusters", 2, 10, 5)
 
-# Analizi başlat
+# 🚀 Trend analizi başlat
 if st.button("Analyze Trends"):
     with st.spinner("Scraping Reddit and analyzing..."):
         posts = []
@@ -76,30 +76,31 @@ if st.button("Analyze Trends"):
             st.error("Too few posts after filtering and cleaning. Try increasing post limit or lowering filters.")
             st.stop()
 
-        # TF-IDF vektörleme
+        # TF-IDF
         num_docs = len(df)
         max_df_val = 0.9
         min_df_val = 2 if num_docs >= 10 else 1
         vectorizer = TfidfVectorizer(max_df=max_df_val, min_df=min_df_val, stop_words='english')
         X = vectorizer.fit_transform(df['cleaned_text'])
 
-        # Küme sayısını veri sayısına göre ayarla
+        # 🧠 Küme sayısını güvenli hale getir
         num_clusters = min(requested_clusters, num_docs)
         if num_clusters < requested_clusters:
             st.warning(f"Number of clusters reduced to {num_clusters} due to limited data.")
 
+        # KMeans kümeleme
         kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
         kmeans.fit(X)
         df['cluster'] = kmeans.labels_
 
         st.success(f"✅ Analysis complete! {num_clusters} topics identified.")
 
-        # Günlük post sayısı grafiği
+        # 📊 Günlük post sayısı
         st.subheader("📈 Daily Post Frequency")
         time_series = df['created_date'].value_counts().sort_index()
         st.line_chart(time_series)
 
-        # Küme küme göster
+        # 🔍 Her küme için analiz
         for i in range(num_clusters):
             cluster_data = df[df['cluster'] == i]
             words = " ".join(cluster_data['cleaned_text']).split()
@@ -120,7 +121,7 @@ if st.button("Analyze Trends"):
                 for title in cluster_data['title'].head(5):
                     st.write(f"- {title}")
 
-        # Anahtar kelime arama
+        # 🔍 Anahtar kelime arama
         st.subheader("🔍 Keyword Filter")
         search_term = st.text_input("Enter a keyword to filter posts:", "")
 
@@ -129,7 +130,7 @@ if st.button("Analyze Trends"):
             st.write(f"Found {len(filtered_df)} posts containing '{search_term}':")
             st.dataframe(filtered_df[['title', 'score', 'comments', 'created_date']])
 
-        # CSV dışa aktarım
+        # 💾 CSV dışa aktarım
         st.subheader("📦 Download Clustered Data")
         st.download_button("Download CSV", df.to_csv(index=False), file_name="reddit_clusters.csv", mime='text/csv')
 
