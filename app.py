@@ -12,11 +12,19 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
-# İlk kullanımda stopwords indir
+# Stopwords indir
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
 
-# Reddit API erişimi
+# Genişletilmiş anlamsız kelime listesi
+custom_noise = set([
+    'like', 'im', 'dont', 'never', 'asked', 'use', 'really', 'thing', 'things', 'know',
+    'got', 'get', 'one', 'something', 'even', 'people', 'still', 'thats', 'make',
+    'want', 'would', 'think', 'see', 'much', 'also', 'could', 'say', 'way'
+])
+all_stopwords = stop_words.union(custom_noise)
+
+# Reddit API
 reddit = praw.Reddit(
     client_id="QLXZb0s_Cx-fIrHIHD9O6Q",
     client_secret="3tzZlmidMztZUWGc4IA321buEHKaiA",
@@ -30,10 +38,10 @@ def clean_text(text):
     text = text.lower()
     text = re.sub(r"http\S+|www\S+|[^a-z\s]", "", text)
     tokens = text.split()
-    filtered = [word for word in tokens if word not in stop_words]
+    filtered = [word for word in tokens if word not in all_stopwords]
     return " ".join(filtered)
 
-# Grafik ve kelime bulutu gösterimi
+# Wordcloud ve Bar Chart
 def display_wordcloud_and_bar(df, title):
     text = " ".join(df['cleaned_text'])
     tokens = text.split()
@@ -51,9 +59,9 @@ def display_wordcloud_and_bar(df, title):
     st.image(wc.to_array())
 
 # Uygulama başlığı
-st.title("🧠 Reddit Trend Catcher (Auto Time-Based)")
+st.title("🧠 Reddit Trend Catcher (Auto Time-Based + Prediction)")
 
-# Subreddit sabit (dilersen kullanıcıdan alınabilir)
+# Sabit subreddit (istersen kullanıcıdan da alabiliriz)
 subreddit = reddit.subreddit("chatgpt")
 posts = []
 limit = 200
@@ -73,37 +81,42 @@ df['cleaned_text'] = df['full_text'].apply(clean_text)
 df['created_date'] = pd.to_datetime(df['created_utc']).dt.date
 df['created_datetime'] = pd.to_datetime(df['created_utc'])
 
-# Tarih aralıkları
+# Tarih segmentleri
 today = pd.Timestamp.now().normalize()
 this_week = today - timedelta(days=7)
 this_month = today.replace(day=1)
+last_week = today - timedelta(days=14)
 
+# Segmentlere ayır
 daily_df = df[df['created_datetime'].dt.date == today.date()]
 weekly_df = df[df['created_datetime'] >= this_week]
 monthly_df = df[df['created_datetime'] >= this_month]
+prev_week_df = df[(df['created_datetime'] >= last_week) & (df['created_datetime'] < this_week)]
 
-# Trend analizleri
+# Gösterimler
 display_wordcloud_and_bar(daily_df, "Today's Trending Words")
 display_wordcloud_and_bar(weekly_df, "This Week's Trending Words")
 display_wordcloud_and_bar(monthly_df, "This Month's Trending Words")
 
-# Trend tahmini (gelecek ay için)
-st.subheader("🔮 Predicted Trending Words for Next Month")
-weekly_text = " ".join(weekly_df['cleaned_text'])
-monthly_text = " ".join(monthly_df['cleaned_text'])
+# 🔮 Gelecek Haftanın Trend Tahmini (haftalık farklara göre)
+st.subheader("🔮 Predicted Trending Words for Next Week (Based on Weekly Increase)")
 
-weekly_counter = Counter(weekly_text.split())
-monthly_counter = Counter(monthly_text.split())
+prev_week_text = " ".join(prev_week_df['cleaned_text'])
+curr_week_text = " ".join(weekly_df['cleaned_text'])
 
-trending_up = {}
-for word in weekly_counter:
-    diff = weekly_counter[word] - monthly_counter.get(word, 0)
-    if diff > 0:
-        trending_up[word] = diff
+prev_week_counter = Counter(prev_week_text.split())
+curr_week_counter = Counter(curr_week_text.split())
 
-if trending_up:
-    top_predicted = sorted(trending_up.items(), key=lambda x: x[1], reverse=True)[:10]
-    df_predicted = pd.DataFrame(top_predicted, columns=["Word", "Trend Increase"])
-    st.table(df_predicted)
+trend_diff = {}
+for word in curr_week_counter:
+    increase = curr_week_counter[word] - prev_week_counter.get(word, 0)
+    if increase > 0:
+        trend_diff[word] = increase
+
+if trend_diff:
+    predicted = sorted(trend_diff.items(), key=lambda x: x[1], reverse=True)[:10]
+    df_pred = pd.DataFrame(predicted, columns=['Word', 'Weekly Increase'])
+    st.table(df_pred)
 else:
-    st.write("No rising trends detected for prediction.")
+    st.write("No significant upward trends detected.")
+
