@@ -8,24 +8,26 @@ matplotlib.use('Agg')
 
 from nltk.corpus import stopwords
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.cluster import KMeans
 from collections import Counter
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from datetime import datetime
+import altair as alt
 
-# NLTK Stopwords
+# Download NLTK stopwords
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
 
-# Reddit API
+# Reddit API credentials (demo)
 reddit = praw.Reddit(
     client_id="QLXZb0s_Cx-fIrHIHD9O6Q",
     client_secret="3tzZlmidMztZUWGc4IA321buEHKaiA",
     user_agent="CuguLeee"
 )
 
-# Temizlik fonksiyonu
+# Cleaning function
 def clean_text(text):
     if not isinstance(text, str):
         return ""
@@ -35,111 +37,131 @@ def clean_text(text):
     filtered = [word for word in tokens if word not in stop_words]
     return " ".join(filtered)
 
-# Arayüz başlığı
-st.title("🔥 Reddit Trend Catcher (LLM-Free)")
+# App Title
+st.title("🔥 Reddit Trend Catcher - Ultimate Edition")
 
-# Girdiler
-subreddit_input = st.text_input("Enter subreddit (e.g., artificial, gaming)", "artificial")
-post_limit = st.slider("Number of posts to analyze", 20, 200, 100)
-min_score = st.slider("Minimum score of posts", 0, 1000, 0)
-min_comments = st.slider("Minimum number of comments", 0, 500, 0)
-requested_clusters = st.slider("Requested number of topic clusters", 2, 10, 5)
+# Input Panel
+st.sidebar.header("🔧 Analysis Settings")
+subreddit_input = st.sidebar.text_input("Subreddit", "artificial")
+post_limit = st.sidebar.slider("Post Limit", 20, 200, 100)
+min_score = st.sidebar.slider("Minimum Score", 0, 1000, 0)
+min_comments = st.sidebar.slider("Minimum Comments", 0, 500, 0)
+cluster_method = st.sidebar.selectbox("Clustering Method", ["KMeans", "LDA"])
+requested_clusters = st.sidebar.slider("Number of Topics", 2, 10, 5)
 
-# Trend analizi
-if st.button("Analyze Trends"):
-    with st.spinner("Scraping Reddit and analyzing..."):
-        try:
+# Optional file upload for offline analysis
+st.sidebar.markdown("---")
+st.sidebar.markdown("📎 Upload CSV for Offline Analysis")
+uploaded_file = st.sidebar.file_uploader("Choose a file", type="csv")
+
+# Keyword filter global input
+search_term = st.text_input("🔍 Keyword Filter", "")
+
+# Analyze button
+if st.button("🚀 Analyze Trends"):
+    with st.spinner("🔄 Fetching & analyzing posts..."):
+
+        if uploaded_file is not None:
+            df = pd.read_csv(uploaded_file)
+            st.success("✅ Uploaded file loaded.")
+        else:
+            try:
+                subreddit = reddit.subreddit(subreddit_input)
+                raw_posts = list(subreddit.hot(limit=post_limit))
+            except Exception:
+                st.error("❌ Subreddit not found or inaccessible.")
+                st.stop()
+
             posts = []
-            subreddit = reddit.subreddit(subreddit_input)
-            raw_posts = list(subreddit.hot(limit=post_limit))
-        except Exception as e:
-            st.error("⚠️ Failed to load subreddit. Check if it exists or is public.")
-            st.stop()
+            for post in raw_posts:
+                if post.score >= min_score and post.num_comments >= min_comments:
+                    posts.append({
+                        "title": post.title,
+                        "selftext": post.selftext or "",
+                        "score": post.score,
+                        "comments": post.num_comments,
+                        "created_utc": datetime.utcfromtimestamp(post.created_utc)
+                    })
 
-        for post in raw_posts:
-            if post.score >= min_score and post.num_comments >= min_comments:
-                posts.append({
-                    "title": post.title,
-                    "selftext": post.selftext or "",
-                    "score": post.score,
-                    "comments": post.num_comments,
-                    "created_utc": datetime.utcfromtimestamp(post.created_utc)
-                })
+            if not posts:
+                st.warning("⚠️ No posts found after applying filters.")
+                st.stop()
 
-        if not posts:
-            st.warning("No posts found with the selected filters.")
-            st.stop()
+            df = pd.DataFrame(posts)
+            df['full_text'] = df['title'] + " " + df['selftext']
+            df['cleaned_text'] = df['full_text'].apply(clean_text)
+            df['created_date'] = pd.to_datetime(df['created_utc']).dt.date
+            df = df[df['cleaned_text'].str.strip() != ""]
 
-        df = pd.DataFrame(posts)
-        df['full_text'] = df['title'] + " " + df['selftext']
-        df['cleaned_text'] = df['full_text'].apply(clean_text)
-        df['created_date'] = pd.to_datetime(df['created_utc']).dt.date
-        df = df[df['cleaned_text'].str.strip() != ""]
+            if df.empty or len(df) < 3:
+                st.error("⚠️ Too few posts after cleaning.")
+                st.stop()
 
-        if df.empty or len(df) < 3:
-            st.error("Too few posts after filtering and cleaning.")
-            st.stop()
-
-        # TF-IDF
-        num_docs = len(df)
-        max_df_val = 0.9
-        min_df_val = 2 if num_docs >= 10 else 1
-        vectorizer = TfidfVectorizer(max_df=max_df_val, min_df=min_df_val, stop_words='english')
+        # TF-IDF Matrix
+        vectorizer = TfidfVectorizer(max_df=0.9, min_df=2, stop_words='english')
         X = vectorizer.fit_transform(df['cleaned_text'])
 
-        # Kümeleme
+        num_docs = len(df)
         num_clusters = min(requested_clusters, num_docs)
         if num_clusters < requested_clusters:
-            st.warning(f"Clusters reduced to {num_clusters} due to low data.")
+            st.warning(f"Reduced clusters to {num_clusters} due to low post count.")
 
-        kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
-        kmeans.fit(X)
-        df['cluster'] = kmeans.labels_
+        if cluster_method == "KMeans":
+            model = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
+            model.fit(X)
+            df['cluster'] = model.labels_
+        else:
+            lda = LatentDirichletAllocation(n_components=num_clusters, random_state=42)
+            lda_output = lda.fit_transform(X)
+            df['cluster'] = lda_output.argmax(axis=1)
 
-        st.success(f"✅ Analysis complete! {num_clusters} topics identified.")
+        st.success(f"✅ {num_clusters} topics detected using {cluster_method}.")
 
-        # Zaman serisi
-        st.subheader("📈 Daily Post Frequency")
-        time_series = df['created_date'].value_counts().sort_index()
-        st.line_chart(time_series)
+        # Daily Post Frequency
+        st.subheader("📅 Post Frequency Over Time")
+        ts = df['created_date'].value_counts().sort_index()
+        st.line_chart(ts)
 
-        # Her küme için analiz
-        for i in range(num_clusters):
-            cluster_data = df[df['cluster'] == i]
-            words = " ".join(cluster_data['cleaned_text']).split()
-            common = Counter(words).most_common(10)
-            topic_label = common[0][0].capitalize() if common else f"Topic {i+1}"
-
-            st.subheader(f"🧠 Topic {i+1}: {topic_label}")
-            st.markdown(f"Avg Score: **{cluster_data['score'].mean():.2f}** | Avg Comments: **{cluster_data['comments'].mean():.2f}**")
-
-            if common:
-                words_df = pd.DataFrame(common, columns=["Word", "Frequency"])
-                st.bar_chart(words_df.set_index("Word"))
-
-            wc_text = " ".join(words)
-            wordcloud = WordCloud(width=600, height=300, background_color="white").generate(wc_text)
-            st.image(wordcloud.to_array())
-
-            with st.expander("📝 Example post titles"):
-                for title in cluster_data['title'].head(5):
-                    st.write(f"- {title}")
-
-        # TF-IDF yoğunluk görselleştirmesi
-        st.subheader("📌 TF-IDF Feature Overview")
+        # Show TF-IDF top words
+        st.subheader("🧠 Top Words by TF-IDF")
         tfidf_df = pd.DataFrame(X.toarray(), columns=vectorizer.get_feature_names_out())
         top_terms = tfidf_df.sum().sort_values(ascending=False).head(20)
         st.bar_chart(top_terms)
 
-        # Anahtar kelime arama
-        st.subheader("🔍 Keyword Filter")
-        search_term = st.text_input("Enter a keyword to filter posts:", "")
+        # Cluster summaries
+        for i in range(num_clusters):
+            cluster_data = df[df['cluster'] == i]
+            words = " ".join(cluster_data['cleaned_text']).split()
+            common = Counter(words).most_common(10)
+            label = common[0][0].capitalize() if common else f"Topic {i+1}"
 
+            st.subheader(f"📌 Topic {i+1}: {label}")
+            st.markdown(f"Avg Score: **{cluster_data['score'].mean():.2f}**, Avg Comments: **{cluster_data['comments'].mean():.2f}**")
+
+            # Word Frequencies
+            if common:
+                word_df = pd.DataFrame(common, columns=["Word", "Frequency"])
+                st.bar_chart(word_df.set_index("Word"))
+
+            # WordCloud
+            wc = WordCloud(width=600, height=300, background_color="white").generate(" ".join(words))
+            st.image(wc.to_array())
+
+            # Example titles
+            with st.expander("📝 Example Titles"):
+                for t in cluster_data['title'].head(5):
+                    st.write(f"- {t}")
+
+        # Keyword search
         if search_term.strip():
-            filtered_df = df[df['cleaned_text'].str.contains(search_term.lower(), na=False)]
-            st.write(f"Found {len(filtered_df)} posts containing '{search_term}':")
-            st.dataframe(filtered_df[['title', 'score', 'comments', 'created_date']])
+            st.subheader(f"🔍 Posts containing '{search_term}'")
+            filtered = df[df['cleaned_text'].str.contains(search_term.lower(), na=False)]
+            st.write(f"Found {len(filtered)} posts")
+            st.dataframe(filtered[['title', 'score', 'comments', 'created_date']])
 
-        # CSV dışa aktarım
-        st.subheader("📦 Download Clustered Data")
-        st.download_button("Download CSV", df.to_csv(index=False), file_name="reddit_clusters.csv", mime='text/csv')
+        # CSV download
+        st.subheader("💾 Download Results")
+        st.download_button("Download CSV", df.to_csv(index=False), file_name="reddit_trends.csv", mime='text/csv')
+
+        # Suggest link sharing
+        st.info("✅ To share results, consider uploading the CSV to a public space like Hugging Face Datasets or Google Drive.")
