@@ -7,3 +7,4 @@ matplotlib
 wordcloud
 transformers
 prophet
+torch
