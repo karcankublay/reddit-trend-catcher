@@ -7,128 +7,129 @@ import matplotlib
 matplotlib.use('Agg')
 
 from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
 from collections import Counter
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
-from transformers import pipeline
+from datetime import datetime
 
-# NLTK stopwords ve LLM
+# Stopwords indir (sadece ilk çalıştırmada gerekli)
 nltk.download('stopwords')
 stop_words = set(stopwords.words('english'))
-summarizer = pipeline("summarization", model="t5-small", tokenizer="t5-small")
 
-# Gereksiz kelimeler
-custom_noise = set([
-    'like', 'im', 'dont', 'never', 'asked', 'use', 'really', 'thing', 'things', 'know',
-    'got', 'get', 'one', 'something', 'even', 'people', 'still', 'thats', 'make',
-    'want', 'would', 'think', 'see', 'much', 'also', 'could', 'say', 'way'
-])
-all_stopwords = stop_words.union(custom_noise)
+# Reddit API bağlantısı
+reddit = praw.Reddit(
+    client_id="QLXZb0s_Cx-fIrHIHD9O6Q",
+    client_secret="3tzZlmidMztZUWGc4IA321buEHKaiA",
+    user_agent="CuguLeee"
+)
 
-# Metin temizleme
+# Metin temizleme fonksiyonu
 def clean_text(text):
     if not isinstance(text, str):
         return ""
     text = text.lower()
     text = re.sub(r"http\S+|www\S+|[^a-z\s]", "", text)
     tokens = text.split()
-    filtered = [word for word in tokens if word not in all_stopwords]
+    filtered = [word for word in tokens if word not in stop_words]
     return " ".join(filtered)
 
-# Başlık
-st.title("🧠 Reddit Trend Catcher – t5-small LLM Version")
+# Arayüz başlığı
+st.title("🔥 Reddit Trend Catcher")
 
-# Subreddit seçimi
-selected_subreddits = st.multiselect("Choose subreddits:", ["chatgpt", "ai", "technology", "worldnews"], default=["chatgpt"])
-limit = st.slider("Number of posts per subreddit:", 50, 200, 100)
+# Girdi alanları
+subreddit_input = st.text_input("Enter subreddit (e.g., artificial, gaming)", "artificial")
+post_limit = st.slider("Number of posts to analyze", 20, 200, 100)
+min_score = st.slider("Minimum score of posts", 0, 1000, 0)
+min_comments = st.slider("Minimum number of comments", 0, 500, 0)
+num_clusters = st.slider("Number of topic clusters", 2, 10, 5)
 
-# Reddit API
-reddit = praw.Reddit(client_id="QLXZb0s_Cx-fIrHIHD9O6Q",
-                     client_secret="3tzZlmidMztZUWGc4IA321buEHKaiA",
-                     user_agent="CuguLeee")
+# Analiz başlat
+if st.button("Analyze Trends"):
+    with st.spinner("Scraping Reddit and analyzing..."):
+        posts = []
+        subreddit = reddit.subreddit(subreddit_input)
+        raw_posts = list(subreddit.hot(limit=post_limit))
 
-# Veri çekme
-posts = []
-for subreddit_name in selected_subreddits:
-    subreddit = reddit.subreddit(subreddit_name)
-    for post in subreddit.hot(limit=limit):
-        posts.append({
-            "subreddit": subreddit_name,
-            "title": post.title,
-            "selftext": post.selftext or "",
-            "created_utc": datetime.utcfromtimestamp(post.created_utc)
-        })
+        for post in raw_posts:
+            if post.score >= min_score and post.num_comments >= min_comments:
+                posts.append({
+                    "title": post.title,
+                    "selftext": post.selftext or "",
+                    "score": post.score,
+                    "comments": post.num_comments,
+                    "created_utc": datetime.utcfromtimestamp(post.created_utc)
+                })
 
-df = pd.DataFrame(posts)
-df['full_text'] = df['title'] + " " + df['selftext']
-df['cleaned_text'] = df['full_text'].apply(clean_text)
-df['created_date'] = pd.to_datetime(df['created_utc']).dt.date
-df['created_datetime'] = pd.to_datetime(df['created_utc'])
+        if not posts:
+            st.warning("No posts found with the selected filters.")
+            st.stop()
 
-# Zaman dilimleri
-today = pd.Timestamp.now().normalize()
-this_week = today - timedelta(days=7)
-this_month = today.replace(day=1)
-last_week = today - timedelta(days=14)
+        df = pd.DataFrame(posts)
+        df['full_text'] = df['title'] + " " + df['selftext']
+        df['cleaned_text'] = df['full_text'].apply(clean_text)
+        df['created_date'] = pd.to_datetime(df['created_utc']).dt.date
+        df = df[df['cleaned_text'].str.strip() != ""]
 
-daily_df = df[df['created_datetime'].dt.date == today.date()]
-weekly_df = df[df['created_datetime'] >= this_week]
-monthly_df = df[df['created_datetime'] >= this_month]
-prev_week_df = df[(df['created_datetime'] >= last_week) & (df['created_datetime'] < this_week)]
+        if df.empty or len(df) < 3:
+            st.error("Too few posts after filtering and cleaning. Try increasing post limit or lowering filters.")
+            st.stop()
 
-# Analiz ve özetleme
-def display_cluster(df_segment, title):
-    text = " ".join(df_segment['cleaned_text'])
-    tokens = text.split()
-    counter = Counter(tokens).most_common(10)
-    if not counter:
-        st.write(f"No data for {title}")
-        return
+        # TF-IDF vektörleme (hata önleyici dinamik ayarlama)
+        num_docs = len(df)
+        max_df_val = 0.9
+        min_df_val = 2
 
-    st.subheader(f"📊 {title}")
-    word_df = pd.DataFrame(counter, columns=['Word', 'Frequency'])
-    st.bar_chart(word_df.set_index("Word"))
+        if num_docs < 10:
+            max_df_val = 1.0
+            min_df_val = 1
 
-    wc = WordCloud(width=600, height=300, background_color="white").generate(text)
-    st.image(wc.to_array())
+        if min_df_val >= num_docs * max_df_val:
+            min_df_val = 1
 
-    selected_word = st.selectbox(f"See posts containing a word ({title})", [w[0] for w in counter], key=title)
-    matching_titles = df_segment[df_segment['cleaned_text'].str.contains(selected_word, na=False)]['title'].head(10)
-    st.markdown("**Related post titles:**")
-    for t in matching_titles:
-        st.write(f"• {t}")
+        vectorizer = TfidfVectorizer(max_df=max_df_val, min_df=min_df_val, stop_words='english')
+        X = vectorizer.fit_transform(df['cleaned_text'])
 
-    # t5-small ile özetleme
-    joined_titles = " ".join(matching_titles.tolist())
-    if joined_titles.strip():
-        st.markdown("**🧠 LLM Summary:**")
-        try:
-            input_text = "summarize: " + joined_titles[:512]
-            summary = summarizer(input_text, max_length=60, min_length=20, do_sample=False)[0]['summary_text']
-            st.success(summary)
-        except Exception as e:
-            st.warning("LLM summarization failed.")
+        # Kümeleme
+        kmeans = KMeans(n_clusters=num_clusters, random_state=42, n_init='auto')
+        kmeans.fit(X)
+        df['cluster'] = kmeans.labels_
 
-# Gösterimler
-display_cluster(daily_df, "Today's Trends")
-display_cluster(weekly_df, "This Week's Trends")
-display_cluster(monthly_df, "This Month's Trends")
+        st.success(f"✅ Analysis complete! {num_clusters} topics identified.")
 
-# Tahmin
-st.subheader("🔮 Predicted Trending Words for Next Week")
-prev_text = " ".join(prev_week_df['cleaned_text'])
-curr_text = " ".join(weekly_df['cleaned_text'])
+        # Zaman Serisi Analizi
+        st.subheader("⏱️ Daily Post Frequency")
+        time_series = df['created_date'].value_counts().sort_index()
+        st.line_chart(time_series)
 
-prev_counter = Counter(prev_text.split())
-curr_counter = Counter(curr_text.split())
+        # Küme görselleştirme
+        for i in range(num_clusters):
+            cluster_data = df[df['cluster'] == i]
+            words = " ".join(cluster_data['cleaned_text']).split()
+            common = Counter(words).most_common(10)
+            topic_label = common[0][0].capitalize() if common else f"Topic {i+1}"
 
-trend_diff = {word: curr_counter[word] - prev_counter.get(word, 0) for word in curr_counter if curr_counter[word] - prev_counter.get(word, 0) > 0}
-if trend_diff:
-    top_trends = sorted(trend_diff.items(), key=lambda x: x[1], reverse=True)[:10]
-    trend_df = pd.DataFrame(top_trends, columns=["Word", "Weekly Increase"])
-    st.table(trend_df)
-else:
-    st.write("No rising trends detected.")
+            st.subheader(f"🧠 Topic {i+1}: {topic_label}")
 
+            if common:
+                words_df = pd.DataFrame(common, columns=["Word", "Frequency"])
+                st.bar_chart(words_df.set_index("Word"))
+
+            wc_text = " ".join(words)
+            wordcloud = WordCloud(width=600, height=300, background_color="white").generate(wc_text)
+            st.image(wordcloud.to_array())
+
+        # Anahtar kelime filtreleme
+        st.subheader("🔍 Keyword Filter")
+        search_term = st.text_input("Enter a keyword to filter posts:", "")
+
+        if search_term.strip():
+            filtered_df = df[df['cleaned_text'].str.contains(search_term.lower(), na=False)]
+            st.write(f"Found {len(filtered_df)} posts containing '{search_term}':")
+            st.dataframe(filtered_df[['title', 'score', 'comments', 'created_date']])
+
+        # CSV dışa aktarım
+        st.subheader("📦 Download Clustered Data")
+        st.download_button("Download CSV", df.to_csv(index=False), file_name="reddit_clusters.csv", mime='text/csv')
 
