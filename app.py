@@ -22,9 +22,9 @@ stop_words = set(stopwords.words('english'))
 
 # Reddit API credentials (demo)
 reddit = praw.Reddit(
-    client_id="QLXZb0s_Cx-fIrHIHD9O6Q",
-    client_secret="3tzZlmidMztZUWGc4IA321buEHKaiA",
-    user_agent="CuguLeee"
+    client_id="",
+    client_secret="",
+    user_agent=""
 )
 
 # Cleaning function
